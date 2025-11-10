@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct GoveeCommand<Data: Encodable>: Encodable {
+struct RequestModels<Data: Encodable>: Encodable {
     let msg: Message
     
     struct Message: Encodable {
