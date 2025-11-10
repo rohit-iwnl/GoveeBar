@@ -22,7 +22,7 @@ class NetworkController {
     }
     
     
-    private func sendRequest<T : Encodable>(jsonPayload payload: T){
+    private func sendRequest<T : Encodable>(_ payload: T){
         let encoder = JSONEncoder()
         encoder.outputFormatting = .prettyPrinted
         
@@ -62,5 +62,60 @@ class NetworkController {
         
         
         connection.start(queue: .global())
-    }    
+    }
+    
+    
+    
+    func sendScanCommand() {
+        let payload = RequestModels(
+            msg: .init(
+                cmd: "scan",
+                data: ScanData(account_topic: "reserve")
+            )
+        )
+        sendRequest( payload)
+    }
+
+    func sendTurnCommand(on: Bool) {
+        let payload = RequestModels(
+            msg: .init(
+                cmd: "turn",
+                data: TurnData(value: on ? 1 : 0)
+            )
+        )
+        sendRequest(payload)
+    }
+    
+    func sendBrightness(brightness: Float) {
+        let payload = RequestModels(
+            msg: .init(
+                cmd: "brightness",
+                data: BrightnessData(value: Int(brightness))
+            )
+        )
+        sendRequest(payload)
+    }
+
+    func sendDevStatus() {
+        let payload = RequestModels(
+            msg: .init(
+                cmd: "devStatus",
+                data: EmptyData()
+            )
+        )
+        sendRequest(payload)
+    }
+
+    func sendColor(r: Int, g: Int, b: Int) {
+        let payload = RequestModels(
+            msg: .init(
+                cmd: "colorwc",
+                data: ColorData(
+                    color: .init(r: r, g: g, b: b),
+                    colorTemInKelvin: 0
+                )
+            )
+        )
+        sendRequest(payload)
+    }
 }

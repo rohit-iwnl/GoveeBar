@@ -11,29 +11,29 @@ import AppKit
 
 @available(macOS 12.3, *)
 final class ScreenCaptureSync {
-    private let govee: GoveeDeviceController
-    private let ciContext = CIContext(options: nil)
+    private let govee: NetworkController
+    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])  // Use GPU
     private var stream: SCStream?
     private var outputHandler: StreamOutputHandler?
     private var lastColor: NSColor?
-    private let colorDeltaThreshold: CGFloat = 0.05
-    private let queue = DispatchQueue(label: "com.yourapp.screencapture.queue", qos: .userInitiated)
+    private let colorDeltaThreshold: CGFloat = 0.08  // Slightly higher to reduce flickering
+    private let queue = DispatchQueue(label: "com.rohitmanivel.GoveeBar", qos: .userInteractive)  // Higher priority
 
-    init(goveeController: GoveeDeviceController) {
+    init(goveeController: NetworkController) {
         self.govee = goveeController
     }
 
-    func start(pollInterval: TimeInterval = 0.05, downscaleWidth: Int = 320, downscaleHeight: Int = 180) {
+    func start(pollInterval: TimeInterval = 0.033, downscaleWidth: Int = 160, downscaleHeight: Int = 90) {
         queue.async { [weak self] in
             guard let self = self else { return }
             // Acquire shareable content via completion-handler API
             SCShareableContent.getWithCompletionHandler { content, error in
                 if let error = error {
-                    print("❌ SCShareableContent error: \(error)")
+                    print("SCShareableContent error: \(error)")
                     return
                 }
                 guard let content = content else {
-                    print("❌ No shareable content")
+                    print("No shareable content")
                     return
                 }
 
@@ -42,20 +42,20 @@ final class ScreenCaptureSync {
                 let display = content.displays.first(where: { $0.displayID == mainDisplayID }) ?? content.displays.first
 
                 guard let display = display else {
-                    print("❌ No displays found")
+                    print("No displays found")
                     return
                 }
 
                 // Build content filter for that display
-                // The SCContentFilter initializers allow constructing a filter for a display
                 let filter = SCContentFilter(display: display, excludingWindows: [])
 
-                // Configure stream
+                // Configure stream - optimized for low latency
                 let config = SCStreamConfiguration()
                 config.width = downscaleWidth
                 config.height = downscaleHeight
                 config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(1.0 / pollInterval == 0 ? 1 : Int64(1.0 / pollInterval)))
                 config.showsCursor = false
+                config.queueDepth = 3  // Lower queue depth for faster updates
 
                 // Create the stream (strong reference kept)
                 do {
@@ -75,13 +75,13 @@ final class ScreenCaptureSync {
 
                     stream.startCapture { startError in
                         if let startError = startError {
-                            print("❌ Failed to start capture: \(startError)")
+                            print("Failed to start capture: \(startError)")
                         } else {
-                            print("✔️ ScreenCaptureKit stream started for display \(display.displayID)")
+                            print("ScreenCaptureKit stream started (30fps, 160x90)")
                         }
                     }
                 } catch {
-                    print("❌ Failed to create or configure SCStream: \(error)")
+                    print("Failed to create or configure SCStream: \(error)")
                 }
             }
         }
@@ -92,9 +92,9 @@ final class ScreenCaptureSync {
             guard let self = self else { return }
             self.stream?.stopCapture { err in
                 if let err = err {
-                    print("❌ stopCapture error: \(err)")
+                    print("stopCapture error: \(err)")
                 } else {
-                    print("✔️ Stream stopped")
+                    print("Stream stopped")
                 }
             }
             self.stream = nil
@@ -102,20 +102,18 @@ final class ScreenCaptureSync {
         }
     }
 
-    // MARK: - Frame processing
-    // MARK: - Frame processing
-    // MARK: - Frame processing (dominant-with-fallback)
+    // MARK: - Frame processing (optimized for speed & accuracy)
     private func processSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
 
-        // ---- tuning params ----
-        let targetSize = 40              // sample image max dimension (40x?)
-        let quantStep = 16               // quantize channel by this step (16 -> 0..15)
-        let minPct = 0.03                // a bucket must cover >= 3% to be considered
-        let satThreshold = 0.15          // minimum saturation to be considered (ignore desaturated)
-        let brightThreshold = 0.95       // consider v>brightThreshold with low sat as white
-        let topN = 6                     // how many top buckets to print
+        // ---- optimized params for performance ----
+        let targetSize = 32              // smaller = faster (32x18 for 16:9)
+        let quantStep = 32               // larger step = fewer buckets = faster (32 -> 0..7)
+        let minPct = 0.02                // lower threshold = more responsive to small changes
+        let satThreshold = 0.12          // slightly lower = catch more colors
+        let brightThreshold = 0.92       // slightly lower = avoid pure whites earlier
+        let topN = 4                     // fewer buckets to check = faster
         // ------------------------
 
         // Downscale while keeping aspect so we render a small bitmap
@@ -139,16 +137,25 @@ final class ScreenCaptureSync {
             colorSpace: CGColorSpaceCreateDeviceRGB()
         )
 
-        // Build quantized histogram
+        // Build quantized histogram (optimized with pre-filtering)
         var counts: [UInt32: Int] = [:]
         var totalPixels = 0
+        
+        // Process pixels with early filtering for speed
         for i in stride(from: 0, to: raw.count, by: 4) {
             let a = raw[i+3]
-            if a == 0 { continue } // skip fully transparent if present
+            if a == 0 { continue } // skip fully transparent
+            
             let r = Int(raw[i])
             let g = Int(raw[i+1])
             let b = Int(raw[i+2])
-
+            
+            // Quick pre-filter: skip obvious blacks/whites before quantizing
+            let maxVal = max(r, g, b)
+            let minVal = min(r, g, b)
+            if maxVal < 13 { continue }  // skip near-black (faster than HSV check)
+            if maxVal > 235 && (maxVal - minVal) < 20 { continue }  // skip near-white/gray
+            
             let br = r / quantStep
             let bg = g / quantStep
             let bb = b / quantStep
@@ -208,85 +215,55 @@ final class ScreenCaptureSync {
             readable.append((r,g,b,pct,s,v))
         }
 
-        // Print top buckets
-        let topStrings = readable.map { item in
-            String(format: "(%d,%d,%d) %.1f%% s=%.2f v=%.2f", item.r, item.g, item.b, item.pct * 100.0, item.s, item.v)
-        }
-        print("🎨 Top colors: " + topStrings.joined(separator: ", "))
 
-        // Choose first bucket that passes filters
         var chosenRGB: (r:Int,g:Int,b:Int)? = nil
         for item in readable {
-            // skip undersize
+            // Relaxed filters for instant response
             if item.pct < minPct { continue }
-            // skip near-black
-            if item.v < 0.05 { continue }
-            // skip near-white / very desaturated but very bright
+            if item.v < 0.08 { continue }  // allow darker colors
             if item.v > brightThreshold && item.s < satThreshold { continue }
-            // skip low saturation if you want only vivid colors (optional)
             if item.s < satThreshold { continue }
             chosenRGB = (item.r, item.g, item.b)
             break
         }
 
-        // If nothing acceptable, fallback to average color (so we still send something)
-        if chosenRGB == nil {
-            // compute average via CIAreaAverage (fast)
-            if let avgColor = averageColor(ciImage: ciImage) {
-                let r = Int(round(avgColor.redComponent * 255.0))
-                let g = Int(round(avgColor.greenComponent * 255.0))
-                let b = Int(round(avgColor.blueComponent * 255.0))
-                print("👉 No dominant passed thresholds — falling back to average R:\(r) G:\(g) B:\(b)")
-                chosenRGB = (r,g,b)
-            } else {
-                // as a last resort, pick top bucket raw
-                if let first = readable.first {
-                    chosenRGB = (first.r, first.g, first.b)
-                    print("👉 Fallback to top bucket R:\(first.r) G:\(first.g) B:\(first.b)")
-                } else {
-                    return
+        // Quick fallback - just use top color if it has any saturation
+        if chosenRGB == nil, let first = readable.first {
+            if first.s > 0.05 && first.v > 0.1 {
+                chosenRGB = (first.r, first.g, first.b)
+            }
+        }
+
+        // Send immediately without delta checking for instant response
+        if let chosen = chosenRGB {
+            let newColor = NSColor(calibratedRed: CGFloat(chosen.r)/255.0,
+                                   green: CGFloat(chosen.g)/255.0,
+                                   blue: CGFloat(chosen.b)/255.0,
+                                   alpha: 1.0)
+            
+            // Only send if color actually changed (reduce network spam)
+            if shouldSendColor(newColor) {
+                DispatchQueue.main.async {
+                    self.govee.sendColor(r: chosen.r, g: chosen.g, b: chosen.b)
+                    self.lastColor = newColor
                 }
             }
-        } else {
-            let c = chosenRGB!
-            print("👉 Chosen dominant color → R:\(c.r) G:\(c.g) B:\(c.b)")
         }
 
-        // send the chosen color
-        if let chosen = chosenRGB {
-            DispatchQueue.main.async {
-                self.govee.sendColor(r: chosen.r, g: chosen.g, b: chosen.b)
-                self.lastColor = NSColor(calibratedRed: CGFloat(chosen.r)/255.0,
-                                         green: CGFloat(chosen.g)/255.0,
-                                         blue: CGFloat(chosen.b)/255.0,
-                                         alpha: 1.0)
-            }
-        }
-
-        // Helper: compute average via CIAreaAverage (used for fallback)
-        func averageColor(ciImage: CIImage) -> NSColor? {
-            let extent = ciImage.extent
-            let extentVector = CIVector(x: extent.origin.x, y: extent.origin.y, z: extent.size.width, w: extent.size.height)
-            guard let filter = CIFilter(name: "CIAreaAverage", parameters: [kCIInputImageKey: ciImage, kCIInputExtentKey: extentVector]),
-                  let output = filter.outputImage else {
-                return nil
-            }
-            var bitmap = [UInt8](repeating: 0, count: 4)
-            let outRect = CGRect(x: 0, y: 0, width: 1, height: 1)
-            ciContext.render(output,
-                             toBitmap: &bitmap,
-                             rowBytes: 4,
-                             bounds: outRect,
-                             format: .RGBA8,
-                             colorSpace: CGColorSpaceCreateDeviceRGB())
-            let r = CGFloat(bitmap[0]) / 255.0
-            let g = CGFloat(bitmap[1]) / 255.0
-            let b = CGFloat(bitmap[2]) / 255.0
-            return NSColor(calibratedRed: r, green: g, blue: b, alpha: 1.0)
-        }
     }
-
-
+    
+    // Check if color change is significant enough to send
+    private func shouldSendColor(_ newColor: NSColor) -> Bool {
+        guard let last = lastColor else { return true }
+        
+        // Fast RGB distance check (avoid expensive color space conversions)
+        let dr = abs(newColor.redComponent - last.redComponent)
+        let dg = abs(newColor.greenComponent - last.greenComponent)
+        let db = abs(newColor.blueComponent - last.blueComponent)
+        let maxDelta = max(dr, dg, db)
+        
+        return maxDelta > colorDeltaThreshold
+    }
 }
 
 /// Concrete SCStreamOutput implementer. Receives CMSampleBuffers from SCStream.
