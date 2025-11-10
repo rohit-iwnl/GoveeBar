@@ -135,9 +135,9 @@ class DeviceManager {
     var statusMessage: String = "Ready"
     
     private var listener: NWListener?
-    private let multicastAddress = "239.255.255.250"
-    private let multicastPort: UInt16 = 4001
-    private let listenPort: UInt16 = 4002
+    private let multicastAddress = NetworkConstants().multicastAddress
+    private let multicastPort: UInt16 = UInt16(NetworkConstants().multicastPort)
+    private let listenPort: UInt16 = UInt16(NetworkConstants().listenPort)
     
     private var controller: NetworkController?
     private let storage = DeviceStorage()
