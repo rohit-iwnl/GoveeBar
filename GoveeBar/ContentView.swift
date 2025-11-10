@@ -7,15 +7,36 @@
 
 import SwiftUI
 
+
 struct ContentView: View {
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        VStack() {
+            HStack {
+                Text("GoveeBar")
+                    .font(.largeTitle)
+                    .fontWeight(.semibold)
+                
+                Spacer()
+            
+                Button {
+                    NSApp.terminate(nil)
+                } label: {
+                    Text("Quit")
+                }
+                .tint(.red)
+            }
+            
+            Divider()
+            
+            
+            
+        
+
+            Spacer()
+            
         }
         .padding()
+        .frame(width: 300, height: 200)
     }
 }
 
