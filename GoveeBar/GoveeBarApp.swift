@@ -10,8 +10,9 @@ import SwiftUI
 @main
 struct GoveeBarApp: App {
     var body: some Scene {
-        WindowGroup {
+        MenuBarExtra("GoveeBar", systemImage: "characters.uppercase") {
             ContentView()
         }
+        .menuBarExtraStyle(.automatic)
     }
 }
